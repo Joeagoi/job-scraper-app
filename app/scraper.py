@@ -1,59 +1,83 @@
-# app/scraper.py
-
 import requests
-from bs4 import BeautifulSoup
+import os
+from dotenv import load_dotenv
+from app.models import db, Job
+from flask import Flask
+from config import Config
 
-# Define your keywords
+load_dotenv()
+
+APP_ID = os.getenv("ADZUNA_APP_ID")
+APP_KEY = os.getenv("ADZUNA_APP_KEY")
+
+COUNTRY = "gb"
+MAX_PAGES = 2
+
 KEYWORDS = [
     "Database Administrator", "SQL", "MySQL", "PostgreSQL", "ETL", "Data Pipeline", "Data"
 ]
-
-# Convert keywords to lowercase for easier matching
 KEYWORDS = [kw.lower() for kw in KEYWORDS]
 
-#BASE_URL = "https://unjobs.org"
-BASE_URL = "https://www.unep.org"
-TARGET_URL = f"{BASE_URL}/work-with-us"
+API_URL = f"https://api.adzuna.com/v1/api/jobs/{COUNTRY}/search"
+
+# Initialize Flask app to use DB
+app = Flask(__name__)
+app.config.from_object(Config)
+db.init_app(app)
 
 def fetch_jobs():
-    print(f"Fetching jobs from {TARGET_URL}...")
-    #response = requests.get(TARGET_URL)
-    headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
-    response = requests.get(TARGET_URL, headers=headers)
-    if response.status_code != 200:
-        print(f"Failed to fetch jobs: {response.status_code}")
-        return []
+    all_jobs = []
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    job_rows = soup.select("div#content div.job")
-    results = []
+    for page in range(1, MAX_PAGES + 1):
+        print(f"\nFetching page {page}...")
 
-    for job in job_rows:
-        title_elem = job.find("a")
-        location_elem = job.select_one("span.location")
-        
-        if not title_elem:
+        params = {
+            "app_id": APP_ID,
+            "app_key": APP_KEY,
+            "what": "data"
+        }
+
+        response = requests.get(f"{API_URL}/{page}", params=params)
+        print(f"→ Request URL: {response.url}")
+        if response.status_code != 200:
+            print(f"❌ Error {response.status_code}: {response.text}")
             continue
-        
-        title = title_elem.text.strip()
-        url = BASE_URL + title_elem["href"]
-        location = location_elem.text.strip() if location_elem else "N/A"
 
-        # Keyword filtering
-        if any(keyword in title.lower() for keyword in KEYWORDS):
-            results.append({
+        jobs = response.json().get("results", [])
+
+        for job in jobs:
+            title = job.get("title", "")
+            if not any(kw in title.lower() for kw in KEYWORDS):
+                continue
+
+            job_data = {
                 "title": title,
-                "url": url,
-                "location": location,
-            })
+                "company": job.get("company", {}).get("display_name", "Unknown"),
+                "location": job.get("location", {}).get("display_name", "Unknown"),
+                "url": job.get("redirect_url", "N/A")
+            }
 
-    return results
+            all_jobs.append(job_data)
+
+    return all_jobs
 
 
 if __name__ == "__main__":
     jobs = fetch_jobs()
-    print(f"\nFound {len(jobs)} matching jobs:\n")
+    print(f"\n✅ Found {len(jobs)} matching jobs:\n")
+    
+    with app.app_context():
+        db.create_all()  # ensure table exists
+
+        new_jobs = 0
+        for job in jobs:
+            if not Job.query.filter_by(url=job["url"]).first():
+                db.session.add(Job(**job))
+                new_jobs += 1
+        db.session.commit()
+
+        print(f"✅ Inserted {new_jobs} new job(s) into the database.\n")
+
     for job in jobs:
-        print(f"- {job['title']} ({job['location']})")
+        print(f"- {job['title']} ({job['company']}, {job['location']})")
         print(f"  {job['url']}\n")

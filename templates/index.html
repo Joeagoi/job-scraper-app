@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Job Scraper</title>
+</head>
+<body>
+    <h1>Latest Jobs</h1>
+    <ul>
+        {% for job in jobs %}
+        <li>
+            <a href="{{ job.url }}" target="_blank">{{ job.title }}</a>
+            <br>{{ job.company }} – {{ job.location }}<br>
+            <small>Added {{ job.date_added }}</small>
+        </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
